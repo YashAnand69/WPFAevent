@@ -1,0 +1,87 @@
+name: Fork-only sync status validation
+on:
+  push:
+    branches: [validation/sync-status-oct18]
+permissions:
+  contents: read
+jobs:
+  validate:
+    if: github.repository == 'YashAnand69/WPFAevent'
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: wordpress_test_password
+        ports: [3306:3306]
+        options: >-
+          --health-cmd="mysqladmin ping --silent"
+          --health-interval=10s --health-timeout=5s --health-retries=5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: mysqli
+          coverage: none
+          tools: composer
+      - run: sudo apt-get update && sudo apt-get install -y mysql-client subversion
+      - run: composer install --prefer-dist --optimize-autoloader --no-progress
+      - name: Format only contribution PHP files
+        run: |
+          mkdir -p validation-logs
+          set +e
+          vendor/bin/phpcbf admin/class-wpfaevent-eventyay-ajax-sync.php includes/eventyay-importer/class-wpfaevent-ajax-controller.php tests/unit/EventyayAjaxErrorTest.php 2>&1 | tee validation-logs/format.log
+          code=${PIPESTATUS[0]}
+          set -e
+          test "$code" -le 1
+          git diff > validation-logs/format.patch
+      - name: Install throwaway WordPress test database
+        run: bash bin/install-wp-tests.sh wordpress_test root wordpress_test_password 127.0.0.1 latest
+      - name: Prove focused regression on original upstream source
+        id: baseline
+        continue-on-error: true
+        run: |
+          cp admin/class-wpfaevent-eventyay-ajax-sync.php /tmp/candidate-admin.php
+          cp includes/eventyay-importer/class-wpfaevent-ajax-controller.php /tmp/candidate-controller.php
+          git show d5d3b810682a481654adcf7e55e1d5f25cf380f6:admin/class-wpfaevent-eventyay-ajax-sync.php > admin/class-wpfaevent-eventyay-ajax-sync.php
+          git show d5d3b810682a481654adcf7e55e1d5f25cf380f6:includes/eventyay-importer/class-wpfaevent-ajax-controller.php > includes/eventyay-importer/class-wpfaevent-ajax-controller.php
+          set +e
+          vendor/bin/phpunit --filter EventyayAjaxErrorTest 2>&1 | tee validation-logs/baseline.log
+          code=${PIPESTATUS[0]}
+          set -e
+          cp /tmp/candidate-admin.php admin/class-wpfaevent-eventyay-ajax-sync.php
+          cp /tmp/candidate-controller.php includes/eventyay-importer/class-wpfaevent-ajax-controller.php
+          test "$code" -ne 0
+          grep -q 'FAILURES!' validation-logs/baseline.log
+      - name: Full PHPUnit suite
+        id: tests
+        continue-on-error: true
+        run: set -o pipefail; composer test 2>&1 | tee validation-logs/tests.log
+      - name: Full WordPress coding standards
+        id: phpcs
+        continue-on-error: true
+        run: set -o pipefail; composer phpcs 2>&1 | tee validation-logs/phpcs.log
+      - name: Full PHPStan analysis
+        id: phpstan
+        continue-on-error: true
+        run: set -o pipefail; composer phpstan 2>&1 | tee validation-logs/phpstan.log
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: sync-status-validation
+          path: |
+            validation-logs/
+            admin/class-wpfaevent-eventyay-ajax-sync.php
+            includes/eventyay-importer/class-wpfaevent-ajax-controller.php
+            tests/unit/EventyayAjaxErrorTest.php
+      - name: Require every validation gate
+        if: always()
+        env:
+          BASELINE: ${{ steps.baseline.outcome }}
+          TESTS: ${{ steps.tests.outcome }}
+          PHPCS: ${{ steps.phpcs.outcome }}
+          PHPSTAN: ${{ steps.phpstan.outcome }}
+        run: test "$BASELINE/$TESTS/$PHPCS/$PHPSTAN" = success/success/success/success
