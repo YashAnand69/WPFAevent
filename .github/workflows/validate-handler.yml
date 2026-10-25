@@ -1,0 +1,86 @@
+name: Fork-only Eventyay handler validation
+on:
+  push:
+    branches: [validation/eventyay-handler-oct25]
+permissions:
+  contents: read
+jobs:
+  validate:
+    if: github.repository == 'YashAnand69/WPFAevent'
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: wordpress_test_password
+        ports: [3306:3306]
+        options: >-
+          --health-cmd="mysqladmin ping --silent"
+          --health-interval=10s --health-timeout=5s --health-retries=5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: mysqli
+          coverage: none
+          tools: composer
+      - run: sudo apt-get update && sudo apt-get install -y mysql-client subversion
+      - run: composer install --prefer-dist --optimize-autoloader --no-progress
+      - name: Format contribution tests only
+        run: |
+          mkdir -p validation-logs
+          set +e
+          vendor/bin/phpcbf tests/unit/EventyayAjaxHandlerTest.php 2>&1 | tee validation-logs/format.log
+          code=${PIPESTATUS[0]}
+          set -e
+          test "$code" -le 1
+          git diff > validation-logs/format.patch
+      - run: bash bin/install-wp-tests.sh wordpress_test root wordpress_test_password 127.0.0.1 latest
+      - name: Full PHPUnit suite
+        id: tests
+        continue-on-error: true
+        run: set -o pipefail; composer test 2>&1 | tee validation-logs/tests.log
+      - name: WordPress coding standards
+        id: phpcs
+        continue-on-error: true
+        run: set -o pipefail; composer phpcs 2>&1 | tee validation-logs/phpcs.log
+      - name: PHPStan
+        id: phpstan
+        continue-on-error: true
+        run: set -o pipefail; composer phpstan 2>&1 | tee validation-logs/phpstan.log
+      - name: Prove a missing maintained hook is caught
+        id: mutation
+        continue-on-error: true
+        run: |
+          cp includes/class-wpfaevent.php /tmp/wpfaevent-original.php
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('includes/class-wpfaevent.php')
+          text = p.read_text()
+          lines = [line for line in text.splitlines(keepends=True) if 'add_action' in line and "'wp_ajax_fossasia_sync_eventyay'" in line]
+          assert len(lines) == 1
+          p.write_text(text.replace(lines[0], ''))
+          PY
+          set +e
+          vendor/bin/phpunit --filter EventyayAjaxHandlerTest 2>&1 | tee validation-logs/missing-hook-mutant.log
+          code=${PIPESTATUS[0]}
+          set -e
+          cp /tmp/wpfaevent-original.php includes/class-wpfaevent.php
+          test "$code" -ne 0
+          grep -q 'FAILURES!' validation-logs/missing-hook-mutant.log
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: handler-validation
+          path: |
+            validation-logs/
+            tests/unit/EventyayAjaxHandlerTest.php
+      - name: Require every gate
+        if: always()
+        env:
+          TESTS: ${{ steps.tests.outcome }}
+          PHPCS: ${{ steps.phpcs.outcome }}
+          PHPSTAN: ${{ steps.phpstan.outcome }}
+          MUTATION: ${{ steps.mutation.outcome }}
+        run: test "$TESTS/$PHPCS/$PHPSTAN/$MUTATION" = success/success/success/success
