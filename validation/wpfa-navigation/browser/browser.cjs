@@ -119,6 +119,7 @@ async function awaitableMain() {
           assert.equal(await page.evaluate(() => document.activeElement.id), 'custom-section-details');
           assert.equal(await page.evaluate(() => window.__navProbe.scrolls.at(-1).options.behavior), 'smooth');
           assert.equal(await page.evaluate(() => window.__navProbe.clicks.at(-1).prevented), true);
+          assert.equal(new URL(page.url()).hash, '#custom-section-details');
         });
         await check(`cross-page-${label}`, false, async () => {
           await visit(fixture.event);
