@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 35
     env:
-      SOURCE_SHA: add5822fd1fd1dcfb756e2e3be2ca488cd9da531
+      SOURCE_SHA: bf39c31b306b61362463961356f137a75e21fb4b
       BASE_SHA: af771bf3291366bea2b70ab636f15aea073d01f6
       WP_INSTALL_TESTS_SKIP_UPDATE_CHECK: 'true'
     services:
