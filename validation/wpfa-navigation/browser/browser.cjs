@@ -98,6 +98,27 @@ async function awaitableMain() {
           assert.equal(probe.scrolls.length, 0, 'native CSS branch must not call plugin scrollIntoView');
           assert.equal(probe.clicks.at(-1).prevented, false, 'native anchor default must remain enabled');
           assert(new URL(page.url()).hash === '#custom-section-details');
+          assert.equal(await page.evaluate(() => document.activeElement.id), 'custom-section-details');
+        });
+        await check(`keyboard-native-css-${label}`, false, async () => {
+          await prepare('smooth');
+          await details().focus();
+          await page.keyboard.press('Enter');
+          await assertTargetVisible();
+          assert.equal(await page.evaluate(() => document.activeElement.id), 'custom-section-details');
+          assert.equal(await page.evaluate(() => window.__navProbe.scrolls.length), 0);
+          assert.equal(new URL(page.url()).hash, '#custom-section-details');
+          await page.keyboard.press('Tab');
+          assert.equal(await page.locator('#custom-section-details').getAttribute('tabindex'), null);
+        });
+        await check(`rejected-history-${label}`, false, async () => {
+          await prepare('auto');
+          await page.evaluate(() => { history.pushState = () => { throw new DOMException('Injected rejected history update', 'SecurityError'); }; });
+          await details().click();
+          await assertTargetVisible();
+          assert.equal(await page.evaluate(() => document.activeElement.id), 'custom-section-details');
+          assert.equal(await page.evaluate(() => window.__navProbe.scrolls.at(-1).options.behavior), 'smooth');
+          assert.equal(await page.evaluate(() => window.__navProbe.clicks.at(-1).prevented), true);
         });
         await check(`cross-page-${label}`, false, async () => {
           await visit(fixture.event);
