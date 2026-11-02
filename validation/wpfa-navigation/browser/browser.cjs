@@ -10,7 +10,7 @@ const themeType = theme === 'twentytwentyone' ? 'classic' : 'block';
 const output = process.env.WPFA_OUTPUT;
 assert(['baseline', 'fixed'].includes(mode));
 fs.mkdirSync(output, {recursive: true});
-const report = {mode, theme, themeType, checks: [], pageErrors: [], consoleErrors: [], failedLocalRequests: [], blockedExternalRequests: []};
+const report = {mode, theme, themeType, checks: [], visits: [], pageErrors: [], consoleErrors: [], failedLocalRequests: [], blockedExternalRequests: []};
 let page;
 const browser = awaitableMain();
 async function awaitableMain() {
@@ -116,6 +116,7 @@ async function awaitableMain() {
             const nextPage = context.waitForEvent('page');
             await details().click({modifiers: ['Control']});
             const popup = await nextPage;
+            await popup.waitForURL(url => url.hash === '#custom-section-details' && url.origin === new URL(fixture.home).origin);
             await popup.waitForLoadState('domcontentloaded');
             assert.equal(new URL(popup.url()).hash, '#custom-section-details');
             assert.equal(new URL(page.url()).hash, '');
@@ -128,6 +129,7 @@ async function awaitableMain() {
             const nextPage = context.waitForEvent('page');
             await details().click();
             const popup = await nextPage;
+            await popup.waitForURL(url => url.hash === '#custom-section-details' && url.origin === new URL(fixture.home).origin);
             await popup.waitForLoadState('domcontentloaded');
             assert.equal(new URL(popup.url()).hash, '#custom-section-details');
             assert.equal(new URL(page.url()).hash, '');
@@ -158,6 +160,7 @@ async function awaitableMain() {
 async function visit(url) {
   const response = await page.goto(url, {waitUntil: 'domcontentloaded'});
   assert(response && response.status() === 200, `HTTP ${response && response.status()} for ${url}`);
+  report.visits.push({requested: url, resolved: page.url()});
   await page.locator('.nav .nav-links-main').waitFor();
   if (mode === 'fixed') await page.waitForFunction(type => window.wpfaeventPublic?.themeType === type, themeType);
   await page.evaluate(() => {

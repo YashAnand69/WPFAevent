@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 35
     env:
-      SOURCE_SHA: 06fc7e364db7759e696d4f0cf67479dd05dddd42
+      SOURCE_SHA: add5822fd1fd1dcfb756e2e3be2ca488cd9da531
       BASE_SHA: af771bf3291366bea2b70ab636f15aea073d01f6
       WP_INSTALL_TESTS_SKIP_UPDATE_CHECK: 'true'
     services:
@@ -110,6 +110,11 @@ jobs:
         id: browser
         continue-on-error: true
         run: bash harness/validation/wpfa-navigation/run-browser.sh "$GITHUB_WORKSPACE/plugin" "$GITHUB_WORKSPACE/harness/validation/wpfa-navigation" "$GITHUB_WORKSPACE/validation-logs/browser" "$BASE_SHA"
+      - name: Print validation diagnostics
+        if: always()
+        run: |
+          test ! -f validation-logs/format.patch || cat validation-logs/format.patch
+          find validation-logs/browser -name '*results.json' -type f -print -exec cat {} \; || true
       - uses: actions/upload-artifact@v6
         if: always()
         with:

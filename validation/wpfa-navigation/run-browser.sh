@@ -17,13 +17,14 @@ wp config create --path="$site" --dbname=wordpress_browser --dbuser=root --dbpas
 wp db create --path="$site"
 wp core install --path="$site" --url=http://127.0.0.1:8188 --title='Navigation validation' --admin_user=validation --admin_password=throwaway_navigation_password --admin_email=validation@example.invalid --skip-email
 ln -s "$plugin" "$site/wp-content/plugins/wpfaevent"
+wp rewrite structure '/%postname%/' --path="$site"
 wp plugin activate wpfaevent --path="$site"
 wp eval-file "$harness/seed.php" --path="$site" > "$WPFA_FIXTURE"
 python3 -c 'import json,os; x=json.load(open(os.environ["WPFA_FIXTURE"])); assert all(x[k].startswith("http://127.0.0.1:8188/") for k in ("home","event","custom"))'
 wp theme install twentytwentyone twentytwentythree --path="$site" --force
 wp core version --path="$site" > "$output/wordpress-version.txt"
 wp theme list --path="$site" --format=json > "$output/theme-versions.json"
-php -d opcache.enable_cli=0 -S 127.0.0.1:8188 -t "$site" "$harness/router.php" > "$output/php-server.log" 2>&1 &
+php -d opcache.enable=0 -d opcache.enable_cli=0 -S 127.0.0.1:8188 -t "$site" "$harness/router.php" > "$output/php-server.log" 2>&1 &
 server_pid=$!
 for attempt in $(seq 1 40); do if curl -fsS http://127.0.0.1:8188/ > /dev/null; then break; fi; sleep 1; done
 curl -fsS http://127.0.0.1:8188/ > /dev/null
