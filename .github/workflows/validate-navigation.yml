@@ -1,0 +1,130 @@
+name: Fork-only native WordPress navigation validation
+on:
+  push:
+    branches: [validation/navigation-nov1]
+permissions:
+  contents: read
+jobs:
+  validate:
+    if: github.repository == 'YashAnand69/WPFAevent'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      SOURCE_SHA: 06fc7e364db7759e696d4f0cf67479dd05dddd42
+      BASE_SHA: af771bf3291366bea2b70ab636f15aea073d01f6
+      WP_INSTALL_TESTS_SKIP_UPDATE_CHECK: 'true'
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: wordpress_test_password
+        ports: [3306:3306]
+        options: >-
+          --health-cmd="mysqladmin ping --silent"
+          --health-interval=10s --health-timeout=5s --health-retries=5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: harness
+          persist-credentials: false
+      - name: Require an immutable source commit
+        run: '[[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]'
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          path: plugin
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: mysqli
+          coverage: none
+          tools: composer, wp-cli
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - name: Install isolated validation dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y mysql-client subversion
+          mkdir -p validation-logs
+          test "$(git -C plugin rev-parse HEAD)" = "$SOURCE_SHA"
+          git -C plugin merge-base --is-ancestor "$BASE_SHA" HEAD
+          printf '%s\n' "$SOURCE_SHA" > validation-logs/source-sha.txt
+          (cd plugin && composer install --prefer-dist --optimize-autoloader --no-progress && npm ci)
+          npm --prefix harness/validation/wpfa-navigation/browser ci --ignore-scripts --no-audit --no-fund
+          harness/validation/wpfa-navigation/browser/node_modules/.bin/playwright install --with-deps chromium
+      - name: Format contribution test only; capture any required patch
+        id: format
+        continue-on-error: true
+        working-directory: plugin
+        run: |
+          set +e
+          vendor/bin/phpcbf tests/unit/EventHeaderNavigationTest.php 2>&1 | tee ../validation-logs/format.log
+          code=${PIPESTATUS[0]}
+          set -e
+          test "$code" -le 1
+          git diff -- tests/unit/EventHeaderNavigationTest.php > ../validation-logs/format.patch
+          test ! -s ../validation-logs/format.patch
+      - name: Install WordPress PHPUnit test environment
+        working-directory: plugin
+        run: bash bin/install-wp-tests.sh wordpress_test root wordpress_test_password 127.0.0.1 latest
+      - name: Prove baseline failure with the candidate tests
+        id: baseline
+        continue-on-error: true
+        working-directory: plugin
+        run: |
+          set -euo pipefail
+          files=(public/partials/header.php includes/helpers/class-wpfaevent-main-navigation-helper.php public/class-wpfaevent-public.php public/js/wpfaevent-public.js)
+          restore() { for file in "${files[@]}"; do git show "HEAD:$file" > "$file"; done; }
+          trap restore EXIT
+          for file in "${files[@]}"; do git show "$BASE_SHA:$file" > "$file"; done
+          set +e
+          vendor/bin/phpunit --filter EventHeaderNavigationTest 2>&1 | tee ../validation-logs/baseline-tests.log
+          code=${PIPESTATUS[0]}
+          set -e
+          test "$code" -eq 1
+          grep -q 'FAILURES!' ../validation-logs/baseline-tests.log
+          ! grep -q 'ERRORS!' ../validation-logs/baseline-tests.log
+      - name: Full PHPUnit suite
+        id: tests
+        continue-on-error: true
+        working-directory: plugin
+        run: set -o pipefail; composer test 2>&1 | tee ../validation-logs/tests.log
+      - name: Full WordPress coding standards
+        id: phpcs
+        continue-on-error: true
+        working-directory: plugin
+        run: set -o pipefail; composer phpcs 2>&1 | tee ../validation-logs/phpcs.log
+      - name: PHPStan
+        id: phpstan
+        continue-on-error: true
+        working-directory: plugin
+        run: set -o pipefail; composer phpstan 2>&1 | tee ../validation-logs/phpstan.log
+      - name: Full JavaScript lint and durable navigation tests
+        id: javascript
+        continue-on-error: true
+        working-directory: plugin
+        run: set -o pipefail; (npm run lint && npm run test:navigation) 2>&1 | tee ../validation-logs/javascript.log
+      - name: Actual WordPress browser checks; baseline and fixed; classic and block
+        id: browser
+        continue-on-error: true
+        run: bash harness/validation/wpfa-navigation/run-browser.sh "$GITHUB_WORKSPACE/plugin" "$GITHUB_WORKSPACE/harness/validation/wpfa-navigation" "$GITHUB_WORKSPACE/validation-logs/browser" "$BASE_SHA"
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: navigation-native-validation
+          path: |
+            validation-logs/
+            plugin/tests/unit/EventHeaderNavigationTest.php
+      - name: Require every gate
+        if: always()
+        env:
+          FORMAT: ${{ steps.format.outcome }}
+          BASELINE: ${{ steps.baseline.outcome }}
+          TESTS: ${{ steps.tests.outcome }}
+          PHPCS: ${{ steps.phpcs.outcome }}
+          PHPSTAN: ${{ steps.phpstan.outcome }}
+          JAVASCRIPT: ${{ steps.javascript.outcome }}
+          BROWSER: ${{ steps.browser.outcome }}
+        run: test "$FORMAT/$BASELINE/$TESTS/$PHPCS/$PHPSTAN/$JAVASCRIPT/$BROWSER" = success/success/success/success/success/success/success
