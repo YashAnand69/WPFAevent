@@ -1,7 +1,7 @@
 name: Fork-only calendar URI validation
 on:
   push:
-    branches: [validation/calendar-uri-nov4]
+    branches: [validation/calendar-uri-final-nov4]
 permissions:
   contents: read
 jobs:
