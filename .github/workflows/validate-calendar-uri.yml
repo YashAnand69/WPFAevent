@@ -1,0 +1,91 @@
+name: Fork-only calendar URI validation
+on:
+  push:
+    branches: [validation/calendar-uri-nov4]
+permissions:
+  contents: read
+jobs:
+  validate:
+    if: github.repository == 'YashAnand69/WPFAevent'
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: wordpress_test_password
+        ports: [3306:3306]
+        options: >-
+          --health-cmd="mysqladmin ping --silent"
+          --health-interval=10s --health-timeout=5s --health-retries=5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: mysqli
+          coverage: none
+          tools: composer
+      - run: sudo apt-get update && sudo apt-get install -y mysql-client subversion
+      - run: composer install --prefer-dist --optimize-autoloader --no-progress
+      - name: Format contribution tests only
+        run: |
+          mkdir -p validation-logs
+          set +e
+          vendor/bin/phpcbf tests/unit/CalendarTest.php 2>&1 | tee validation-logs/format.log
+          code=${PIPESTATUS[0]}
+          set -e
+          test "$code" -le 1
+          git diff > validation-logs/format.patch
+      - run: bash bin/install-wp-tests.sh wordpress_test root wordpress_test_password 127.0.0.1 latest
+      - name: Original source regression proof
+        id: baseline
+        continue-on-error: true
+        run: |
+          cp includes/class-wpfaevent-calendar.php /tmp/fixed-calendar.php
+          git show af771bf:includes/class-wpfaevent-calendar.php > includes/class-wpfaevent-calendar.php
+          set +e
+          vendor/bin/phpunit --filter CalendarTest 2>&1 | tee validation-logs/baseline.log
+          code=${PIPESTATUS[0]}
+          set -e
+          test "$code" -ne 0
+          grep -q 'FAILURES!' validation-logs/baseline.log
+          cp validation-tools/calendar-fixture.txt /tmp/CalendarParserFixtureTest.php
+          CALENDAR_VARIANT=before vendor/bin/phpunit /tmp/CalendarParserFixtureTest.php 2>&1 | tee validation-logs/parser-before.log
+          cp /tmp/fixed-calendar.php includes/class-wpfaevent-calendar.php
+      - name: Full PHPUnit suite
+        id: tests
+        continue-on-error: true
+        run: set -o pipefail; composer test 2>&1 | tee validation-logs/tests.log
+      - name: WordPress coding standards
+        id: phpcs
+        continue-on-error: true
+        run: set -o pipefail; composer phpcs 2>&1 | tee validation-logs/phpcs.log
+      - name: PHPStan
+        id: phpstan
+        continue-on-error: true
+        run: set -o pipefail; composer phpstan 2>&1 | tee validation-logs/phpstan.log
+      - name: Actual iCalendar consumer validation
+        id: parser
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          CALENDAR_VARIANT=after vendor/bin/phpunit /tmp/CalendarParserFixtureTest.php 2>&1 | tee validation-logs/parser-after.log
+          python3 -m venv /tmp/calendar-parser
+          /tmp/calendar-parser/bin/pip install icalendar
+          /tmp/calendar-parser/bin/python validation-tools/check-parser.py | tee validation-logs/parser.log
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: calendar-uri-validation
+          path: |
+            validation-logs/
+            tests/unit/CalendarTest.php
+      - name: Require every gate
+        if: always()
+        env:
+          BASELINE: ${{ steps.baseline.outcome }}
+          TESTS: ${{ steps.tests.outcome }}
+          PHPCS: ${{ steps.phpcs.outcome }}
+          PHPSTAN: ${{ steps.phpstan.outcome }}
+          PARSER: ${{ steps.parser.outcome }}
+        run: test "$BASELINE/$TESTS/$PHPCS/$PHPSTAN/$PARSER" = success/success/success/success/success

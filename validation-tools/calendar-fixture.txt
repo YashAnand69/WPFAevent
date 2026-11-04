@@ -1,0 +1,19 @@
+<?php
+class CalendarParserFixtureTest extends WP_UnitTestCase {
+    public function test_export_actual_event_metadata() {
+        $urls = array(
+            'https://example.test/events/a;b?tracks=one,two&encoded=%2C#details',
+            'https://example.test/events/long;a?tracks=one,two&label=' . str_repeat( 'word', 30 ),
+            'https://example.test/events/plain?encoded=%2C%3B&x=one',
+        );
+        foreach ( $urls as $index => $url ) {
+            $id = $this->factory->post->create( array( 'post_type' => 'wpfa_event', 'post_status' => 'publish', 'post_title' => 'Calendar, demo; text' ) );
+            update_post_meta( $id, 'wpfa_event_start_date', '2026-06-05' );
+            update_post_meta( $id, 'wpfa_event_url', $url );
+            $data = Wpfaevent_Calendar::get_event_calendar_data( $id );
+            $this->assertNotWPError( $data );
+            file_put_contents( 'validation-logs/' . getenv( 'CALENDAR_VARIANT' ) . '-' . $index . '.ics', Wpfaevent_Calendar::generate_event_ics( $id ) );
+            file_put_contents( 'validation-logs/' . getenv( 'CALENDAR_VARIANT' ) . '-' . $index . '.json', json_encode( array( 'url' => $data['url'], 'summary' => $data['title'] ) ) );
+        }
+    }
+}
