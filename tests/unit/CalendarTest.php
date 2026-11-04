@@ -82,7 +82,65 @@ class CalendarTest extends WP_UnitTestCase {
 		$this->assertStringContainsString( 'SUMMARY:FOSS\, Asia\; Event \\\\ Test\nNext', $ics );
 		$this->assertStringContainsString( 'DESCRIPTION:Line one\nLine two\, with\; chars \\\\ here', $ics );
 		$this->assertStringContainsString( 'LOCATION:Singapore\, Hall A', $ics );
-		$this->assertStringContainsString( 'URL:https://example.test/events/fossasia?x=1\,2', $ics );
+	}
+
+	/**
+	 * Calendar URL properties keep URI delimiters instead of TEXT escaping.
+	 */
+	public function test_ics_url_preserves_uri_delimiters() {
+		$event        = $this->all_day_event();
+		$event['url'] = 'https://example.test/events/a;b?tracks=one,two&encoded=%2C#details';
+		$ics          = Wpfaevent_Calendar::build_event_ics_content( $event );
+		$unfolded     = str_replace( "\r\n ", '', $ics );
+
+		$this->assertStringContainsString( 'URL:' . $event['url'] . "\r\n", $unfolded );
+	}
+
+	/**
+	 * Long URL properties fold without changing their URI when unfolded.
+	 */
+	public function test_ics_url_folding_preserves_the_uri() {
+		$event        = $this->all_day_event();
+		$event['url'] = 'https://example.test/events/a;b?tracks=one,two&label=' . str_repeat( 'word', 30 );
+		$ics          = Wpfaevent_Calendar::build_event_ics_content( $event );
+		$unfolded     = str_replace( "\r\n ", '', $ics );
+
+		$this->assertStringContainsString( 'URL:' . $event['url'] . "\r\n", $unfolded );
+		foreach ( explode( "\r\n", $ics ) as $line ) {
+			$this->assertLessThanOrEqual( 75, strlen( $line ) );
+		}
+	}
+
+	/**
+	 * Raw line breaks in URLs must not create new calendar properties.
+	 */
+	public function test_ics_url_cannot_inject_a_property() {
+		$event        = $this->all_day_event();
+		$event['url'] = "https://example.test/event\r\nATTENDEE:mailto:other@example.test";
+		$ics          = Wpfaevent_Calendar::build_event_ics_content( $event );
+		$unfolded     = str_replace( "\r\n ", '', $ics );
+
+		$this->assertStringNotContainsString( "\r\nATTENDEE:", $unfolded );
+		$this->assertStringContainsString( 'URL:https://example.test/eventATTENDEE:mailto:other@example.test', $unfolded );
+	}
+
+	/**
+	 * Event metadata reaches the exported URI without extra backslashes.
+	 */
+	public function test_generated_ics_preserves_the_event_url() {
+		$event_id = $this->factory->post->create(
+			array(
+				'post_type'   => 'wpfa_event',
+				'post_status' => 'publish',
+			)
+		);
+		$url      = 'https://example.test/events/a;b?tracks=one,two&encoded=%2C';
+		update_post_meta( $event_id, 'wpfa_event_start_date', '2026-06-05' );
+		update_post_meta( $event_id, 'wpfa_event_url', $url );
+
+		$ics = Wpfaevent_Calendar::generate_event_ics( $event_id );
+		$this->assertNotWPError( $ics );
+		$this->assertStringContainsString( 'URL:' . $url . "\r\n", str_replace( "\r\n ", '', $ics ) );
 	}
 
 	/**
