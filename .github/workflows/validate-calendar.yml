@@ -1,0 +1,72 @@
+name: Fork-only calendar URI validation
+on:
+  push:
+    branches: [validation/calendar-uri-nov4]
+permissions:
+  contents: read
+jobs:
+  validate:
+    if: github.repository == 'YashAnand69/WPFAevent'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: wordpress_test_password
+        ports: [3306:3306]
+        options: >-
+          --health-cmd="mysqladmin ping --silent"
+          --health-interval=10s --health-timeout=5s --health-retries=5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: mysqli
+          tools: composer
+      - run: sudo apt-get update && sudo apt-get install -y mysql-client
+      - run: composer install --prefer-dist --no-interaction --no-scripts
+      - run: bash bin/install-wp-tests.sh wordpress_test root wordpress_test_password 127.0.0.1 latest
+      - name: Prove baseline failures
+        run: |
+          cp includes/class-wpfaevent-calendar.php /tmp/fixed-calendar.php
+          git show af771bf3291366bea2b70ab636f15aea073d01f6:includes/class-wpfaevent-calendar.php > includes/class-wpfaevent-calendar.php
+          set +e
+          composer test -- --filter CalendarTest > baseline.log 2>&1
+          code=$?
+          set -e
+          cat baseline.log
+          cp /tmp/fixed-calendar.php includes/class-wpfaevent-calendar.php
+          test "$code" -ne 0
+          grep 'Failures: 3' baseline.log
+      - name: Full PHPUnit
+        run: composer test | tee fixed.log
+      - name: Changed-file coding standards
+        run: vendor/bin/phpcs includes/class-wpfaevent-calendar.php tests/unit/CalendarTest.php
+      - name: PHPStan
+        run: composer phpstan
+      - name: Produce real calendar output
+        run: |
+          php -r 'require "tests/bootstrap.php"; file_put_contents("calendar.ics", Wpfaevent_Calendar::build_event_ics_content(["uid"=>"uri-test@example.test", "title"=>"Test, title; punctuation", "url"=>"https://example.test/events;a=1?x=1,2&name=caf%C3%A9", "all_day"=>true,"start_date"=>"2026-06-05","end_date"=>"2026-06-06"]));'
+      - name: Parse exported URI
+        run: |
+          python3 -m pip install icalendar==6.3.2
+          python3 - <<'PYCODE'
+          from pathlib import Path
+          from icalendar import Calendar
+          event = Calendar.from_ical(Path('calendar.ics').read_bytes()).walk('VEVENT')[0]
+          assert str(event['URL']) == 'https://example.test/events;a=1?x=1,2&name=caf%C3%A9'
+          assert str(event['SUMMARY']) == 'Test, title; punctuation'
+          print('Actual PHP export parsed correctly by icalendar')
+          PYCODE
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: calendar-uri-evidence
+          path: |
+            baseline.log
+            fixed.log
+            calendar.ics
