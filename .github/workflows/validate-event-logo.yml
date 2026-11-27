@@ -40,7 +40,7 @@ jobs:
           php-version: '8.2'
           extensions: mysqli
           coverage: none
-          tools: composer, wp-cli
+          tools: composer
       - uses: actions/setup-node@v7
         with:
           node-version: '24'
@@ -70,6 +70,14 @@ jobs:
           set -e
           test "$status" -eq 1
           grep -q 'FAILURES!' ../validation-logs/baseline.log
+      - name: Install pinned WordPress CLI for browser checks
+        run: |
+          mkdir -p "$RUNNER_TEMP/wp-cli"
+          cd "$RUNNER_TEMP/wp-cli"
+          curl -fsSL https://github.com/wp-cli/wp-cli/releases/download/v2.12.0/wp-cli-2.12.0.phar -o wp
+          echo 'ce34ddd838f7351d6759068d09793f26755463b4a4610a5a5c0a97b68220d85c  wp' | sha256sum -c -
+          chmod +x wp
+          echo "$RUNNER_TEMP/wp-cli" >> "$GITHUB_PATH"
       - name: Run actual WordPress browser checks
         run: bash harness/validation/wpfa-logo/run.sh "$GITHUB_WORKSPACE/plugin" "$GITHUB_WORKSPACE/harness/validation/wpfa-logo" "$GITHUB_WORKSPACE/validation-logs/browser"
       - name: Full tests, coding standards and type checks
