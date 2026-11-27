@@ -1,0 +1,85 @@
+name: Fork-only native WordPress event logo validation
+on:
+  push:
+    branches: [validation/event-logo-nov27]
+permissions:
+  contents: read
+jobs:
+  validate:
+    if: github.repository == 'YashAnand69/WPFAevent'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      SOURCE_SHA: 239f0ebb11b64045774bbeeb584521b25faeea23
+      BASE_SHA: af771bf3291366bea2b70ab636f15aea073d01f6
+      WP_INSTALL_TESTS_SKIP_UPDATE_CHECK: 'true'
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: wordpress_test_password
+        ports: [3306:3306]
+        options: >-
+          --health-cmd="mysqladmin ping --silent"
+          --health-interval=10s --health-timeout=5s --health-retries=5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: harness
+          persist-credentials: false
+      - name: Require an immutable source commit
+        run: '[[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]'
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          path: plugin
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: mysqli
+          coverage: none
+          tools: composer, wp-cli
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - name: Install isolated validation dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y mysql-client subversion
+          mkdir -p validation-logs
+          test "$(git -C plugin rev-parse HEAD)" = "$SOURCE_SHA"
+          git -C plugin merge-base --is-ancestor "$BASE_SHA" HEAD
+          printf '%s\n' "$SOURCE_SHA" > validation-logs/source-sha.txt
+          (cd plugin && composer install --prefer-dist --optimize-autoloader --no-progress && npm ci)
+          npm --prefix harness/validation/wpfa-logo/browser ci --ignore-scripts --no-audit --no-fund
+          harness/validation/wpfa-logo/browser/node_modules/.bin/playwright install --with-deps chromium
+      - name: Install WordPress tests
+        working-directory: plugin
+        run: bash bin/install-wp-tests.sh wordpress_test root wordpress_test_password 127.0.0.1 latest
+      - name: Confirm baseline rejects explicit removal
+        working-directory: plugin
+        shell: bash
+        run: |
+          path=includes/helpers/class-wpfaevent-event-template-controller.php
+          trap 'git show "HEAD:$path" > "$path"' EXIT
+          git show "$BASE_SHA:$path" > "$path"
+          set +e
+          vendor/bin/phpunit --filter EventLogoTest 2>&1 | tee ../validation-logs/baseline.log
+          status=${PIPESTATUS[0]}
+          set -e
+          test "$status" -eq 1
+          grep -q 'FAILURES!' ../validation-logs/baseline.log
+      - name: Run actual WordPress browser checks
+        run: bash harness/validation/wpfa-logo/run.sh "$GITHUB_WORKSPACE/plugin" "$GITHUB_WORKSPACE/harness/validation/wpfa-logo" "$GITHUB_WORKSPACE/validation-logs/browser"
+      - name: Full tests, coding standards and type checks
+        working-directory: plugin
+        run: |
+          composer test
+          composer phpcs
+          composer phpstan
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: event-logo-validation
+          path: validation-logs/
